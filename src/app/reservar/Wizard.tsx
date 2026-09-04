@@ -187,6 +187,12 @@ export default function Wizard({ config }: { config: SalonConfig }) {
       setError("Escribí tu nombre para confirmar la cita.");
       return;
     }
+    // El teléfono es obligatorio: es el único canal para avisarle a la clienta
+    // si hay que mover o cancelar la cita.
+    if (cleanPhone.length === 0) {
+      setError("Escribí tu teléfono para confirmar la cita.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     const supabase = createClient();
@@ -323,16 +329,16 @@ export default function Wizard({ config }: { config: SalonConfig }) {
                 </div>
               )}
 
-              <div className="grid gap-6">
+              <div className="grid gap-5">
                 {config.categories.map((cat) => {
                   const items = servicesByCategory(config, cat.slug, barber);
                   if (items.length === 0) return null;
                   return (
                     <div key={cat.slug}>
-                      <p className="mb-3 font-display text-[11px] uppercase tracking-[0.3em] text-cream/60">
+                      <p className="mb-2 font-display text-[11px] uppercase tracking-[0.3em] text-cream/60">
                         {cat.label}
                       </p>
-                      <div className="grid gap-3">
+                      <div className="grid gap-2">
                         {items.map((s) => (
                           <ServiceCard
                             key={s.slug}
@@ -401,6 +407,7 @@ export default function Wizard({ config }: { config: SalonConfig }) {
                 <Field
                   label="Teléfono"
                   type="tel"
+                  required
                   value={phone}
                   onChange={setPhone}
                   placeholder="Para confirmarte la cita"
@@ -562,20 +569,20 @@ function ServiceCard({
         // Mismo vidrio esmerilado del card de la landing: estas tarjetas van
         // sobre el fondo de la marca, y en blanco sólido lo tapaban. La
         // seleccionada queda más opaca, que es lo que la separa del resto.
-        "w-full rounded-2xl border px-5 py-4 text-left backdrop-blur-3xl transition-colors",
+        "w-full rounded-xl border px-4 py-3 text-left backdrop-blur-3xl transition-colors",
         active
           ? "border-brand bg-brand-tint/85"
           : "border-line bg-paper-smoke/80 hover:border-brand/60 hover:bg-brand-tint/70",
       ].join(" ")}
     >
       <div className="flex items-start justify-between gap-3">
-        <span className="min-w-0 break-words font-display text-base font-semibold uppercase tracking-wide text-ink">
+        <span className="min-w-0 break-words font-display text-sm font-semibold uppercase tracking-wide text-ink">
           {service.label}
         </span>
         {price && (
           <span
             className={[
-              "shrink-0 rounded-full px-3 py-1 font-mono text-xs font-medium",
+              "shrink-0 rounded-full px-2.5 py-0.5 font-mono text-xs font-medium",
               active ? "bg-brand text-white" : "bg-brand-tint text-brand",
             ].join(" ")}
           >
@@ -583,7 +590,7 @@ function ServiceCard({
           </span>
         )}
       </div>
-      <p className="mt-1.5 text-sm text-ink/75">
+      <p className="mt-1 text-[13px] leading-snug text-ink/75">
         {service.durationMin} min
         {service.description && ` · ${service.description}`}
       </p>
@@ -786,9 +793,9 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-sm font-medium text-ink">
+      <span className="mb-1.5 block text-sm font-medium text-cream">
         {label}
-        {required && <span className="text-brand"> *</span>}
+        {required && <span className="text-gold"> *</span>}
       </span>
       <input
         type={type}

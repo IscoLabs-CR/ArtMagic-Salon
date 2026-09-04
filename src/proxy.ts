@@ -72,10 +72,16 @@ export async function proxy(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * Todas las rutas menos los assets estáticos y las imágenes. `/api` SÍ entra:
-     * la ruta del .ics no necesita CSP, pero tampoco molesta, y dejar el matcher
-     * amplio evita huecos si mañana se agrega un endpoint con sesión.
+     * Todas las rutas menos los assets estáticos y las imágenes. `/api` SÍ entra
+     * (así no quedan huecos si mañana se agrega un endpoint con sesión), con una
+     * excepción: `api/cita.ics`.
+     *
+     * Esa ruta se sirve SIN CSP a propósito. Es un archivo de texto que no
+     * ejecuta nada ni carga subrecursos, así que la CSP no le suma seguridad; en
+     * cambio, en el iPhone la respuesta con CSP terminaba como descarga en vez
+     * de abrir la app Calendario. Saltearla además evita gastar un refresco de
+     * sesión de Supabase en un endpoint público y sin login.
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/cita\\.ics|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

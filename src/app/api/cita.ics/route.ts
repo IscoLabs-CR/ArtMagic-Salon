@@ -82,11 +82,15 @@ export async function GET(request: NextRequest) {
       "Content-Type": "text/calendar; charset=utf-8",
       "Content-Disposition": 'inline; filename="cita.ics"',
       "Cache-Control": "no-store",
-      // Nada de indexar/adivinar tipos sobre una respuesta con datos del cliente.
+      // Nada de adivinar tipos sobre una respuesta con datos del cliente.
       "X-Content-Type-Options": "nosniff",
-      "X-Robots-Tag": "noindex, nofollow",
-      // El .ics puede llevar nombre y servicio: fuera de buscadores y sin referrer.
-      "Referrer-Policy": "no-referrer",
+      // OJO: acá NO se agregan más cabeceras. iOS entrega el archivo a la app
+      // Calendario o lo baja a Descargas según lo que traiga la respuesta, y
+      // con `X-Robots-Tag`/`Referrer-Policy: no-referrer` (y la CSP, que se
+      // saca en el matcher de `src/proxy.ts`) terminaba como descarga: el
+      // cliente veía "cita.ics" en Archivos y el calendario nunca se abría.
+      // El .ics no ejecuta nada ni enlaza a ningún lado, así que la protección
+      // real de esta ruta es la validación del query string de arriba.
     },
   });
 }

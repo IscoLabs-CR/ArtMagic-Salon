@@ -10,10 +10,21 @@ const securityHeaders = [
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=()",
   },
+];
+
+// Cabeceras de aislamiento de ventana. Van en todo MENOS en `/api/cita.ics`:
+// iOS decide si le entrega el .ics a la app Calendario o lo baja como archivo
+// suelto según las cabeceras de la respuesta, y con estas puestas lo bajaba.
+// La ruta queda con el mismo juego de cabeceras que el resto de los salones
+// (ver `ICS_EXCLUDED`), que es el que sí abre el calendario en el iPhone.
+const isolationHeaders = [
   // Evita que el navegador filtre a otros orígenes recursos de esta ventana.
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
   { key: "X-DNS-Prefetch-Control", value: "off" },
 ];
+
+/** Todo menos /api/cita.ics — ver `isolationHeaders`. */
+const ICS_EXCLUDED = "/:path((?!api/cita\\.ics).*)";
 
 // X-Frame-Options y HSTS solo en producción: las extensiones de "mobile preview"
 // cargan la app en un iframe/webview y con DENY se ven en blanco, y HSTS sobre
@@ -39,6 +50,10 @@ const nextConfig: NextConfig = {
         // en dev no se detectaba ninguna regresión de cabeceras).
         source: "/:path*",
         headers: isProd ? [...securityHeaders, ...prodOnlyHeaders] : securityHeaders,
+      },
+      {
+        source: ICS_EXCLUDED,
+        headers: isolationHeaders,
       },
       {
         // El service worker no debe cachearse, para que el navegador siempre
