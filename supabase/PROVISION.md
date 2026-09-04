@@ -170,8 +170,9 @@ los que dependen del estado del cabello) hay un aviso en el wizard: sale al entr
 paso "¿Qué servicio querés?", los lista, y se cierra con **Aceptar**. Se muestra una
 vez por reserva.
 
-Estos servicios **no van en `salon_services`** — no son reservables, así que no
-necesitan duración real, estilista ni cupo. Viven en el `theme` del salón:
+`call_to_book` es **solo el texto del aviso**: la cita en sí la crea la
+administradora desde el panel, con el servicio `admin_only` del catálogo que lleva
+el mismo nombre (ver la sección siguiente). El aviso vive en el `theme` del salón:
 
 ```sql
 update public.salons
@@ -191,11 +192,68 @@ where slug = '<slug>';
 - Sin `phone`, el aviso sale sin botón de llamada.
 - Como todo el `theme`, se edita en vivo: **no requiere redeploy**.
 
-Es lo que resuelve el caso de un servicio que no cabe en la agenda. Ejemplo real: con
-un horario de 8:00–17:00 y almuerzo de 12:00 a 13:00, la mañana y la tarde son bloques
-de 4 h, así que un servicio de **5 h no tiene ningún espacio válido entre semana** —
-`generateDaySlots` devolvería la lista vacía y la clienta vería un día sin horarios sin
-entender por qué. Mejor no ofrecerlo y decirle que llame.
+## Servicios que solo agenda la administradora (`salon_services.admin_only`)
+
+La contraparte del aviso: la clienta llama, y la administradora mete la cita a mano.
+Esos servicios **sí van en `salon_services`** —con su duración real, su estilista y su
+cupo— pero marcados `admin_only`:
+
+```sql
+update public.salon_services set admin_only = true
+where salon_id = '<SALON_ID>' and slug in ('balayage', 'correccion-color');
+```
+
+Qué cambia con la bandera prendida:
+
+- **El sitio público no los muestra.** `servicesForBarber` los filtra salvo que se le
+  pase `{ admin: true }`, y esa vista es únicamente el panel de quien tiene
+  `barbers.is_admin`.
+- **`book_appointment` los rechaza** para cualquier llamador que no sea la admin de ese
+  salón (`current_salon_id() = <salón> and is_salon_admin()`), con el aviso
+  "Ese servicio se agenda solo desde el salón". Esconderlos del wizard no es la única
+  defensa: el RPC es público y se puede llamar a mano.
+- **Todo lo demás es igual que siempre.** El almuerzo, el cierre, los bloqueos y el
+  cupo por espacio los siguen aplicando `book_appointment` y el trigger
+  `enforce_booking_rules`. Una cita de 4 h no entra si hay otra clienta en cualquier
+  punto de esas 4 h.
+- Reagendar y cambiar el servicio de una cita ya creada **no** miran `admin_only`: si
+  la admin le puso un balayage a una estilista, esa estilista puede moverlo desde su
+  panel. La bandera controla quién lo **agenda**, no quién lo administra después.
+
+Como el catálogo por estilista es opt-in y estricto, si el salón ya usa
+`barber_services` hay que cargarle los servicios nuevos a cada estilista que los haga
+(ver la sección de arriba) o no se van a poder agendar en su agenda.
+
+### Servicios que pasan por encima del almuerzo (`ignores_break`)
+
+Con un horario de 8:00–17:00 y almuerzo de 12:00 a 13:00, la mañana y la tarde son
+bloques de 4 h: un servicio de **5 h no tiene ningún espacio válido entre semana**.
+Para esos casos:
+
+```sql
+update public.salon_services set ignores_break = true
+where salon_id = '<SALON_ID>' and slug = 'correccion-color';
+```
+
+El servicio deja de chocar con el descanso —y solo ese servicio—. Lo respetan los tres
+caminos: `book_appointment`, el trigger `enforce_booking_rules` y la rejilla del front
+(`fitsInHours`). El resto de las reglas no se toca.
+
+Combinada con `admin_only`, la excepción queda encerrada donde tiene sentido: la
+clienta nunca puede tomarse sola el almuerzo de la estilista.
+
+**Ambas columnas están apagadas por defecto**, así que los salones que no las usan se
+comportan exactamente igual que antes.
+
+### Qué ve la administradora cuando no se puede
+
+El panel dejó de decir "Sin horarios disponibles este día" a secas: con un servicio de
+4 h eso no le sirve a quien tiene a la clienta al teléfono. Ahora distingue el día
+cerrado, el día bloqueado, el servicio que no entra en la jornada y el día lleno, y
+además cada hora tachada de la rejilla se puede tocar para ver por qué —"a las 10:00
+no se puede: Balayage ocuparía de 10:00 a.m. a 2:00 p.m. y ya hay una clienta en la
+agenda de Lineth durante ese lapso"—. Es `noSlotsReason` + `Slot.reason` en
+`src/lib/booking.ts`.
 
 ### Candado de horario del servidor (`salons.enforce_hours`)
 

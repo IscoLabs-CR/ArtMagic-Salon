@@ -10,6 +10,7 @@ import {
   type Slot,
   type BusyRow,
   type BookingWindow,
+  type NoSlotsReason,
   getService,
   generateDaySlots,
   shopInstant,
@@ -22,6 +23,8 @@ import {
   dateParts,
   isClosedDay,
   minutesToLabel,
+  formatDuration,
+  noSlotsReason,
   priceLabel,
   hasPrices,
   formatCRC,
@@ -427,6 +430,8 @@ export default function Dashboard({
           supabase={supabase}
           config={config}
           barberId={viewing}
+          barberName={viewingName}
+          isAdmin={isAdmin}
           defaultDate={dateStr}
           onClose={() => setModal(null)}
           onDone={(d) => {
@@ -455,6 +460,7 @@ export default function Dashboard({
           supabase={supabase}
           config={config}
           appt={modal.appt}
+          barberName={viewingName}
           onClose={() => setModal(null)}
           onDone={(d) => {
             setModal(null);
@@ -468,6 +474,7 @@ export default function Dashboard({
           supabase={supabase}
           config={config}
           appt={modal.appt}
+          isAdmin={isAdmin}
           onClose={() => setModal(null)}
           onDone={(d) => {
             setModal(null);
@@ -1342,16 +1349,22 @@ function DayChips({
  * que ve el cliente y que aplica la base. `notFitting` deshabilita los que a esa
  * hora no caben (chocan con el almuerzo o se pasan del cierre), para no ofrecer
  * un cambio que el servidor va a rechazar.
+ *
+ * `admin` suma los servicios internos (los tratamientos largos que se coordinan
+ * por teléfono). Solo la administradora los ve, y solo a ella se los acepta
+ * `book_appointment`.
  */
 function ServiceSelect({
   config,
   barberId,
+  admin,
   value,
   onChange,
   notFitting,
 }: {
   config: SalonConfig;
   barberId: string;
+  admin: boolean;
   value: string;
   onChange: (slug: string) => void;
   notFitting?: (s: SalonService) => boolean;
@@ -1359,6 +1372,14 @@ function ServiceSelect({
   const barber = config.barbers.find((b) => b.id === barberId) ?? null;
   const svc = getService(config, value);
   const price = svc ? priceLabel(svc) : null;
+  // El servicio que la cita YA tiene puede no estar en la lista visible: uno
+  // interno abierto por una estilista que no es la admin, o uno dado de baja del
+  // catálogo. Se agrega igual, porque un <select> cuyo `value` no existe entre
+  // sus opciones se planta solo en la primera y cambiaría la cita sin que nadie
+  // lo pidiera.
+  const visible = servicesForBarber(config, barber, { admin });
+  const orphan =
+    svc && !visible.some((s) => s.slug === svc.slug) ? svc : null;
   return (
     <div>
       <p className="mb-2 text-sm font-medium text-ink">Servicio</p>
@@ -1367,8 +1388,11 @@ function ServiceSelect({
         onChange={(e) => onChange(e.target.value)}
         className="w-full rounded-xl border border-line bg-paper px-4 py-2.5 text-ink outline-none focus:border-brand"
       >
+        {orphan && (
+          <option value={orphan.slug}>{orphan.label} — el de esta cita</option>
+        )}
         {config.categories.map((cat) => {
-          const items = servicesByCategory(config, cat.slug, barber);
+          const items = servicesByCategory(config, cat.slug, barber, { admin });
           if (items.length === 0) return null;
           return (
             <optgroup key={cat.slug} label={cat.label}>
@@ -1392,48 +1416,230 @@ function ServiceSelect({
   );
 }
 
+/** Horario del día en palabras ("de 8:00 a.m. a 5:00 p.m., con descanso de
+ *  12:00 p.m. a 1:00 p.m."). El descanso se omite en los servicios que pueden
+ *  pasarle por encima: mencionarlo ahí solo confundiría. */
+function hoursSentence(
+  config: SalonConfig,
+  dateStr: string,
+  service: SalonService | null,
+): string {
+  const h = dayHours(config, dateStr);
+  if (!h) return "";
+  const base = `de ${minutesToLabel(h.openMin)} a ${minutesToLabel(h.closeMin)}`;
+  if (h.breakStartMin == null || h.breakEndMin == null || service?.ignoresBreak)
+    return base;
+  return `${base}, con descanso de ${minutesToLabel(h.breakStartMin)} a ${minutesToLabel(h.breakEndMin)}`;
+}
+
+/** Aviso dorado: no es un error de la app, es la agenda diciendo que no. */
+function SlotNotice({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-xl border border-gold/50 bg-gold-tint px-4 py-3 text-sm leading-relaxed text-gold-deep">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Por qué el día entero se quedó sin espacios. "Sin horarios disponibles"
+ * alcanzaba con cortes de 30 min; con un servicio de 4 h la administradora tiene
+ * a la clienta al teléfono y necesita saber si mover la otra cita o proponer otro
+ * día.
+ */
+function NoSlotsNotice({
+  config,
+  dateStr,
+  service,
+  barberName,
+  reason,
+}: {
+  config: SalonConfig;
+  dateStr: string;
+  service: SalonService | null;
+  barberName: string;
+  reason: NoSlotsReason;
+}) {
+  const dayLabel = longDateLabel(dateStr);
+  const largo = service ? formatDuration(service.durationMin) : "";
+
+  if (reason === "closed")
+    return <SlotNotice>El salón no abre el {dayLabel}.</SlotNotice>;
+
+  if (reason === "past")
+    return (
+      <SlotNotice>
+        Ya pasaron todas las horas de inicio del {dayLabel}.
+      </SlotNotice>
+    );
+
+  if (reason === "blocked")
+    return (
+      <SlotNotice>
+        <strong className="font-semibold">{barberName}</strong> tiene bloqueado el{" "}
+        {dayLabel}. Quitá el bloqueo o elegí otro día.
+      </SlotNotice>
+    );
+
+  if (reason === "does-not-fit")
+    return (
+      <SlotNotice>
+        <strong className="font-semibold">{service?.label}</strong> ocupa {largo}{" "}
+        seguidas y no entra en la jornada del {dayLabel}: se atiende{" "}
+        {hoursSentence(config, dateStr, service)}. Elegí otro día.
+      </SlotNotice>
+    );
+
+  return (
+    <SlotNotice>
+      <strong className="font-semibold">
+        No se puede agendar el {dayLabel}:
+      </strong>{" "}
+      ya hay citas en la agenda de {barberName} y {service?.label} necesita{" "}
+      {largo} seguidas, así que no queda ningún bloque libre de ese largo.
+      Reagendá la otra cita o elegí otro día.
+    </SlotNotice>
+  );
+}
+
+/** Por qué NO se puede tomar UNA hora concreta de la rejilla. */
+function SlotBlockedNotice({
+  config,
+  slot,
+  service,
+  barberName,
+}: {
+  config: SalonConfig;
+  slot: Slot;
+  service: SalonService | null;
+  barberName: string;
+}) {
+  const tz = config.timezone;
+  const span = `de ${formatShopTime(slot.start, tz)} a ${formatShopTime(slot.end, tz)}`;
+
+  if (slot.reason === "past")
+    return <SlotNotice>Las {slot.label} de hoy ya pasaron.</SlotNotice>;
+
+  if (slot.reason === "blocked")
+    return (
+      <SlotNotice>{barberName} tiene ese rato bloqueado en la agenda.</SlotNotice>
+    );
+
+  return (
+    <SlotNotice>
+      <strong className="font-semibold">
+        A las {slot.label} no se puede agendar:
+      </strong>{" "}
+      {service?.label ?? "el servicio"} ocuparía {span} y ya hay una clienta en la
+      agenda de {barberName} durante ese lapso.
+    </SlotNotice>
+  );
+}
+
+/**
+ * Rejilla de horas de inicio. Los espacios que no se pueden tomar siguen
+ * tachados, pero ahora responden al toque: con un servicio de 4 h, "las 10:00 no
+ * se puede porque a las 11:00 entra otra clienta" es justo lo que la
+ * administradora tiene que contestarle a quien está llamando.
+ */
 function SlotButtons({
+  config,
+  dateStr,
+  service,
+  barberName,
   slots,
   selectedMin,
   onSelect,
 }: {
+  config: SalonConfig;
+  dateStr: string;
+  service: SalonService | null;
+  barberName: string;
   slots: Slot[];
   selectedMin: number | null;
   onSelect: (s: Slot) => void;
 }) {
-  if (!slots.some((s) => s.available))
+  // El motivo se guarda junto con el día y el servicio para los que se abrió: si
+  // cambia cualquiera de los dos, la explicación vieja deja de aplicar y
+  // desaparece sola, sin un efecto que la limpie.
+  const [why, setWhy] = useState<{ key: string; slot: Slot } | null>(null);
+  const key = `${dateStr}|${service?.slug ?? ""}`;
+  const shown = why?.key === key ? why.slot : null;
+
+  const noSlots = noSlotsReason(config, dateStr, slots);
+  if (noSlots)
     return (
-      <p className="py-6 text-center text-muted">
-        Sin horarios disponibles este día.
-      </p>
+      <NoSlotsNotice
+        config={config}
+        dateStr={dateStr}
+        service={service}
+        barberName={barberName}
+        reason={noSlots}
+      />
     );
+
+  const anyBlocked = slots.some((s) => !s.available);
+  const isLong = (service?.durationMin ?? 0) > SLOT_STEP_MIN;
+
   return (
-    // Tres columnas en celular: con cuatro, "10:00 a.m." no cabía en la celda y
-    // se salía del botón.
-    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-      {slots.map((s) =>
-        s.available ? (
-          <button
-            key={s.startMin}
-            type="button"
-            onClick={() => onSelect(s)}
-            className={[
-              "rounded-lg border py-2 font-mono text-sm transition-colors",
-              selectedMin === s.startMin
-                ? "border-brand bg-brand text-white"
-                : "border-brand/50 bg-brand-tint text-brand hover:bg-brand hover:text-white",
-            ].join(" ")}
-          >
-            {s.label}
-          </button>
-        ) : (
-          <div
-            key={s.startMin}
-            className="rounded-lg border border-line bg-line/40 py-2 text-center font-mono text-sm text-muted/60 line-through"
-          >
-            {s.label}
-          </div>
-        ),
+    <div>
+      {/* Tres columnas en celular: con cuatro, "10:00 a.m." no cabía en la celda
+          y se salía del botón. */}
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+        {slots.map((s) =>
+          s.available ? (
+            <button
+              key={s.startMin}
+              type="button"
+              onClick={() => {
+                setWhy(null);
+                onSelect(s);
+              }}
+              className={[
+                "rounded-lg border py-2 font-mono text-sm transition-colors",
+                selectedMin === s.startMin
+                  ? "border-brand bg-brand text-white"
+                  : "border-brand/50 bg-brand-tint text-brand hover:bg-brand hover:text-white",
+              ].join(" ")}
+            >
+              {s.label}
+            </button>
+          ) : (
+            <button
+              key={s.startMin}
+              type="button"
+              onClick={() => setWhy({ key, slot: s })}
+              aria-label={`${s.label} — ver por qué no se puede`}
+              className={[
+                "rounded-lg border py-2 text-center font-mono text-sm line-through transition-colors",
+                shown?.startMin === s.startMin
+                  ? "border-gold/60 bg-gold-tint text-gold-deep"
+                  : "border-line bg-line/40 text-muted/60 hover:border-gold/50",
+              ].join(" ")}
+            >
+              {s.label}
+            </button>
+          ),
+        )}
+      </div>
+
+      {shown ? (
+        <div className="mt-3">
+          <SlotBlockedNotice
+            config={config}
+            slot={shown}
+            service={service}
+            barberName={barberName}
+          />
+        </div>
+      ) : (
+        anyBlocked &&
+        isLong && (
+          <p className="mt-2 text-xs text-muted">
+            {service?.label} ocupa {formatDuration(service?.durationMin ?? 0)}{" "}
+            seguidas. Tocá una hora en gris para ver por qué no se puede.
+          </p>
+        )
       )}
     </div>
   );
@@ -1451,17 +1657,28 @@ function ModalError({ children }: { children: React.ReactNode }) {
 // deshabilitar los horarios bloqueados o llenos al crear/reagendar. El filtro es
 // explícito: la dueña lee las filas de todo el salón, y sin acotar por barbero
 // la disponibilidad de una saldría contaminada con las citas de las otras.
-function useDayLoad(supabase: SupabaseClient, tz: string, barberId: string) {
+//
+// `excludeId` saca del cálculo la cita que se está moviendo: si no, se choca
+// consigo misma y el día entero se ve ocupado. Es la misma excepción que hace el
+// trigger de la base (`a.id <> new.id`).
+function useDayLoad(
+  supabase: SupabaseClient,
+  tz: string,
+  barberId: string,
+  excludeId?: string,
+) {
   return useCallback(
     async (d: string): Promise<BusyRow[]> => {
       const dayStart = shopInstant(d, 0, tz).toISOString();
       const dayEnd = shopInstant(addDaysStr(d, 1), 0, tz).toISOString();
-      const { data, error } = await supabase
+      let q = supabase
         .from("appointments")
         .select("start_time, end_time, kind")
         .eq("barber_id", barberId)
         .lt("start_time", dayEnd)
         .gt("end_time", dayStart);
+      if (excludeId) q = q.neq("id", excludeId);
+      const { data, error } = await q;
       if (error) console.error("No se pudo cargar la disponibilidad:", error.message);
       return ((data ?? []) as {
         start_time: string;
@@ -1473,8 +1690,30 @@ function useDayLoad(supabase: SupabaseClient, tz: string, barberId: string) {
         kind: r.kind === "block" ? "block" : "booking",
       }));
     },
-    [supabase, tz, barberId],
+    [supabase, tz, barberId, excludeId],
   );
+}
+
+/**
+ * El aviso del servidor al crear la cita. Los mensajes de la base ya vienen
+ * legibles, pero el del cupo ("No hay campo en ese horario") es demasiado seco
+ * para un servicio de 4 h: pasa cuando otra clienta agendó ese rato mientras la
+ * administradora llenaba el formulario, y hay que decirle qué hacer.
+ */
+function newAppointmentError(
+  message: string,
+  service: SalonService | null,
+  barberName: string,
+): string {
+  if (/no hay campo|bloqueado/i.test(message)) {
+    const largo = service ? ` (${formatDuration(service.durationMin)})` : "";
+    return (
+      `Alguien tomó ese horario mientras llenabas la cita. ` +
+      `${service?.label ?? "El servicio"}${largo} ya no cabe en la agenda de ` +
+      `${barberName} a esa hora: elegí otro horario.`
+    );
+  }
+  return message || "No se pudo crear la cita.";
 }
 
 /* ------------------------------------------------------------ new modal */
@@ -1483,6 +1722,8 @@ function NewAppointmentModal({
   supabase,
   config,
   barberId,
+  barberName,
+  isAdmin,
   defaultDate,
   onClose,
   onDone,
@@ -1490,6 +1731,10 @@ function NewAppointmentModal({
   supabase: SupabaseClient;
   config: SalonConfig;
   barberId: string;
+  /** Nombre de la agenda que se está llenando: los avisos de choque hablan de
+   *  "la agenda de Lineth", no de una estilista sin nombre. */
+  barberName: string;
+  isAdmin: boolean;
   defaultDate: string;
   onClose: () => void;
   onDone: (d: string) => void;
@@ -1501,6 +1746,7 @@ function NewAppointmentModal({
       servicesForBarber(
         config,
         config.barbers.find((b) => b.id === barberId) ?? null,
+        { admin: isAdmin },
       )[0]?.slug ?? "",
   );
   const [date, setDate] = useState(defaultDate);
@@ -1550,7 +1796,7 @@ function NewAppointmentModal({
     });
     setSubmitting(false);
     if (error) {
-      setError(error.message || "No se pudo crear la cita.");
+      setError(newAppointmentError(error.message, serviceInfo, barberName));
       return;
     }
     onDone(date);
@@ -1562,6 +1808,7 @@ function NewAppointmentModal({
         <ServiceSelect
           config={config}
           barberId={barberId}
+          admin={isAdmin}
           value={service}
           onChange={setService}
         />
@@ -1574,6 +1821,10 @@ function NewAppointmentModal({
         <div>
           <p className="mb-2 text-sm font-medium text-ink">Horario</p>
           <SlotButtons
+            config={config}
+            dateStr={date}
+            service={serviceInfo}
+            barberName={barberName}
             slots={slots}
             selectedMin={slot?.startMin ?? null}
             onSelect={setSlot}
@@ -1965,12 +2216,14 @@ function RescheduleModal({
   supabase,
   config,
   appt,
+  barberName,
   onClose,
   onDone,
 }: {
   supabase: SupabaseClient;
   config: SalonConfig;
   appt: Appointment;
+  barberName: string;
   onClose: () => void;
   onDone: (d: string) => void;
 }) {
@@ -1984,7 +2237,12 @@ function RescheduleModal({
   const [slot, setSlot] = useState<Slot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const fetchLoad = useDayLoad(supabase, config.timezone, appt.barber_id);
+  const fetchLoad = useDayLoad(
+    supabase,
+    config.timezone,
+    appt.barber_id,
+    appt.id,
+  );
   const serviceInfo: SalonService | null = appt.service_slug
     ? getService(config, appt.service_slug) ?? null
     : null;
@@ -2044,6 +2302,10 @@ function RescheduleModal({
         <div>
           <p className="mb-2 text-sm font-medium text-ink">Nuevo horario</p>
           <SlotButtons
+            config={config}
+            dateStr={date}
+            service={serviceInfo}
+            barberName={barberName}
             slots={slots}
             selectedMin={slot?.startMin ?? null}
             onSelect={setSlot}
@@ -2075,12 +2337,14 @@ function EditServiceModal({
   supabase,
   config,
   appt,
+  isAdmin,
   onClose,
   onDone,
 }: {
   supabase: SupabaseClient;
   config: SalonConfig;
   appt: Appointment;
+  isAdmin: boolean;
   onClose: () => void;
   onDone: (d: string) => void;
 }) {
@@ -2100,7 +2364,7 @@ function EditServiceModal({
   // opciones para que no llegue a intentarlo.
   const startMin = shopMinutes(appt.start_time, config.timezone);
   const doesNotFit = (s: SalonService) =>
-    !fitsInHours(config, dayStr, startMin, s.durationMin);
+    !fitsInHours(config, dayStr, startMin, s);
 
   const unchanged = service === appt.service_slug;
   const chosen = getService(config, service);
@@ -2151,6 +2415,7 @@ function EditServiceModal({
         <ServiceSelect
           config={config}
           barberId={appt.barber_id}
+          admin={isAdmin}
           value={service}
           onChange={setService}
           notFitting={doesNotFit}

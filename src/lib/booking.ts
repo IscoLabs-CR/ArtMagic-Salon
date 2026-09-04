@@ -55,27 +55,42 @@ export function getService(
   return config.services.find((s) => s.slug === slug);
 }
 
+/** Quién está mirando el catálogo. Los servicios `adminOnly` (tratamientos
+ *  largos que se coordinan por teléfono) SOLO salen con `admin: true`, y esa
+ *  vista es el panel de la administradora. El valor por defecto es la vista
+ *  pública a propósito: quien no diga nada obtiene el catálogo del cliente. */
+export interface CatalogView {
+  admin?: boolean;
+}
+
 /**
  * Servicios que realiza una estilista. En los salones donde todas hacen de todo
  * (`perBarberServices` en false) devuelve el catálogo completo — que es como
  * funcionó siempre. Con catálogo por estilista, solo los suyos: la base rechaza
  * cualquier reserva del par equivocado, así que ofrecerlos sería mentirle al
  * cliente. Sin estilista elegida todavía, el catálogo completo.
+ *
+ * Los `adminOnly` quedan fuera salvo que se pida la vista de admin.
  */
 export function servicesForBarber(
   config: SalonConfig,
   barber: SalonBarber | null,
+  view: CatalogView = {},
 ): SalonService[] {
-  if (!config.perBarberServices || !barber) return config.services;
-  return config.services.filter((s) => barber.serviceSlugs.includes(s.slug));
+  const visible = view.admin
+    ? config.services
+    : config.services.filter((s) => !s.adminOnly);
+  if (!config.perBarberServices || !barber) return visible;
+  return visible.filter((s) => barber.serviceSlugs.includes(s.slug));
 }
 
 export function servicesByCategory(
   config: SalonConfig,
   categorySlug: string,
   barber: SalonBarber | null = null,
+  view: CatalogView = {},
 ): SalonService[] {
-  return servicesForBarber(config, barber).filter(
+  return servicesForBarber(config, barber, view).filter(
     (s) => s.category === categorySlug,
   );
 }
@@ -99,12 +114,19 @@ export function hoursWindow(config: SalonConfig): DayHours {
 
 /* ----------------------------------------------------------------- slots */
 
+/** Por qué un espacio NO se puede tomar. Con servicios cortos daba igual —el
+ *  espacio se veía tachado y listo—; con los largos, la administradora necesita
+ *  poder explicarle a la clienta si el problema es una cita encima, un bloqueo o
+ *  que la hora ya pasó. */
+export type SlotBlockReason = "past" | "blocked" | "taken";
+
 export interface Slot {
   startMin: number; // minutos desde medianoche (hora local del salón)
   label: string; // ej. "9:00 a.m."
   start: Date; // instante absoluto (UTC)
   end: Date; // instante absoluto (UTC), start + duración del servicio
   available: boolean;
+  reason: SlotBlockReason | null; // null cuando está disponible
 }
 
 // Una fila ocupada del día. Un "block" del barbero bloquea el espacio por sí
@@ -183,24 +205,34 @@ export function shopInstant(
   return fromZonedTime(`${dateStr}T${hh}:${mm}:00`, tz);
 }
 
+/** Largo del bloque que ocupa un servicio. Sin servicio elegido todavía, una
+ *  casilla de la rejilla. */
+export function serviceDuration(service: SalonService | null): number {
+  return service?.durationMin ?? SLOT_STEP_MIN;
+}
+
 /**
- * ¿Cabe un servicio de `durationMin` empezando a esa hora, ese día? Aplica el
- * MISMO criterio que la base (`enforce_booking_rules` / `book_appointment`): día
- * abierto, dentro del horario, sin invadir el descanso y alineado a la rejilla.
- * Vive acá una sola vez para que la rejilla del wizard y el modal de cambiar
- * servicio no lleguen a una conclusión distinta de la del servidor.
+ * ¿Cabe este servicio empezando a esa hora, ese día? Aplica el MISMO criterio
+ * que la base (`enforce_booking_rules` / `book_appointment`): día abierto,
+ * dentro del horario, sin invadir el descanso y alineado a la rejilla. Vive acá
+ * una sola vez para que la rejilla del wizard y el modal de cambiar servicio no
+ * lleguen a una conclusión distinta de la del servidor.
+ *
+ * `service.ignoresBreak` levanta la regla del descanso, igual que en la base:
+ * un tratamiento de 5 h no cabe ni en la mañana ni en la tarde de un día con
+ * almuerzo, así que se atiende de corrido.
  */
 export function fitsInHours(
   config: SalonConfig,
   dateStr: string,
   startMin: number,
-  durationMin: number,
+  service: SalonService | null,
 ): boolean {
   const hours = dayHours(config, dateStr);
   if (!hours) return false; // el salón cierra ese día
   if (startMin < hours.openMin) return false;
   if ((startMin - hours.openMin) % SLOT_STEP_MIN !== 0) return false;
-  const endMin = startMin + durationMin;
+  const endMin = startMin + serviceDuration(service);
   // Con `lastStartMin` el servicio puede empezar hasta esa hora aunque termine
   // después del cierre; sin él, tiene que caber completo antes de cerrar.
   if (hours.lastStartMin != null) {
@@ -208,6 +240,7 @@ export function fitsInHours(
   } else if (endMin > hours.closeMin) return false;
   // El descanso (almuerzo) no es "ocupado" sino fuera de horario.
   if (
+    !service?.ignoresBreak &&
     hours.breakStartMin != null &&
     hours.breakEndMin != null &&
     startMin < hours.breakEndMin &&
@@ -233,7 +266,7 @@ export function generateDaySlots(
 ): Slot[] {
   const hours = dayHours(config, dateStr);
   if (!hours) return [];
-  const dur = service?.durationMin ?? SLOT_STEP_MIN;
+  const dur = serviceDuration(service);
   const slots: Slot[] = [];
   // Mismo criterio que `book_appointment` en la base: con `lastStartMin` el
   // servicio puede arrancar hasta esa hora aunque termine después del cierre;
@@ -244,7 +277,7 @@ export function generateDaySlots(
     // Lo que no cabe (se pasa del cierre, cae en el almuerzo) ni se ofrece: no
     // es un espacio "ocupado" sino fuera de horario. Sin esto la base rechaza la
     // reserva recién al confirmar, sin explicación para el cliente.
-    if (!fitsInHours(config, dateStr, m, dur)) continue;
+    if (!fitsInHours(config, dateStr, m, service)) continue;
     const start = shopInstant(dateStr, m, config.timezone);
     const end = new Date(start.getTime() + dur * 60_000);
     const notPast = start.getTime() > now.getTime();
@@ -257,15 +290,57 @@ export function generateDaySlots(
         (b.kind === "booking" && overlaps(start, end, b.start, b.end) ? 1 : 0),
       0,
     );
+    // El orden importa: lo que se le muestra a la administradora es el primer
+    // motivo real. Una hora pasada no se explica como "ocupada".
+    const reason: SlotBlockReason | null = !notPast
+      ? "past"
+      : blocked
+        ? "blocked"
+        : bookingCount >= config.maxBookingsPerSlot
+          ? "taken"
+          : null;
     slots.push({
       startMin: m,
       label: minutesToLabel(m),
       start,
       end,
-      available: notPast && !blocked && bookingCount < config.maxBookingsPerSlot,
+      available: reason === null,
+      reason,
     });
   }
   return slots;
+}
+
+/**
+ * Por qué un día no ofrece NINGÚN espacio para el servicio elegido. Con los
+ * servicios cortos alcanzaba con "sin horarios disponibles"; con los largos
+ * (3–5 h) la administradora necesita saber si la agenda ya está ocupada o si el
+ * servicio simplemente no entra en el horario de ese día — son dos problemas con
+ * salidas distintas (mover de día vs. correr la otra cita).
+ *
+ * Devuelve null cuando sí hay al menos un espacio libre.
+ */
+export type NoSlotsReason =
+  | "closed" // el salón no abre ese día
+  | "does-not-fit" // el servicio no entra en el horario (largo, o choca con el almuerzo)
+  | "past" // el día es hoy y ya pasaron todas las horas de inicio
+  | "blocked" // la estilista tiene el día bloqueado (vacaciones, día libre)
+  | "taken"; // hay citas encima de todos los espacios
+
+export function noSlotsReason(
+  config: SalonConfig,
+  dateStr: string,
+  slots: Slot[],
+): NoSlotsReason | null {
+  if (isClosedDay(config, dateStr)) return "closed";
+  if (slots.some((s) => s.available)) return null;
+  // La rejilla vacía significa que ninguna hora de inicio del día aguanta el
+  // largo del servicio: no es que esté ocupado, es que no cabe.
+  if (slots.length === 0) return "does-not-fit";
+  const live = slots.filter((s) => s.reason !== "past");
+  if (live.length === 0) return "past";
+  if (live.every((s) => s.reason === "blocked")) return "blocked";
+  return "taken";
 }
 
 /* -------------------------------------------------------- fechas / zonas */

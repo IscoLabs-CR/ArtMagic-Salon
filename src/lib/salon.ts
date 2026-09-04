@@ -40,12 +40,22 @@ export interface SalonService {
   description: string;
   durationMin: number; // largo del bloque de la cita (múltiplo de 30)
   displayOrder: number;
+  /** Servicio interno: NO se ofrece en el sitio público. Son los tratamientos
+   *  largos que la clienta coordina por teléfono y que solo la administradora
+   *  agenda desde el panel. `book_appointment` también los rechaza para
+   *  cualquier otro llamador, así que esconderlos no es la única defensa. */
+  adminOnly: boolean;
+  /** Este servicio puede pasar por encima del descanso (almuerzo). Para los
+   *  tratamientos que no caben en ningún bloque del día — con almuerzo de
+   *  12:00 a 1:00, uno de 5 h no entra ni en la mañana ni en la tarde. */
+  ignoresBreak: boolean;
 }
 
 /** Servicio que NO se reserva en línea. Son los tratamientos largos (2:30 a 5 h)
  *  que el salón tiene que calzar a mano en la agenda; el wizard los anuncia en un
- *  aviso y le pide a la clienta que llame. No están en `salon_services`
- *  justamente porque no son reservables. */
+ *  aviso y le pide a la clienta que llame. Es solo el texto del aviso: la cita en
+ *  sí la crea la administradora desde el panel, con el servicio `adminOnly` del
+ *  catálogo que lleva el mismo nombre. */
 export interface CallToBookService {
   label: string;
   durationMin: number;
@@ -117,6 +127,10 @@ interface RawSalon {
     description: string;
     duration_min: number;
     display_order: number;
+    // Ausentes si la base todavía no tiene las columnas (despliegue viejo):
+    // se leen como false y el catálogo se comporta como siempre.
+    admin_only?: boolean;
+    ignores_break?: boolean;
   }[];
   hours: Record<
     string,
@@ -216,6 +230,8 @@ function shape(raw: RawSalon): SalonConfig {
       description: s.description,
       durationMin: s.duration_min,
       displayOrder: s.display_order,
+      adminOnly: s.admin_only === true,
+      ignoresBreak: s.ignores_break === true,
     })),
     hoursByDow,
   };
