@@ -974,14 +974,19 @@ function AppointmentSearch({
       )}
 
       {hits !== null && hits.length > 0 && (
-        <ul className="mt-3 grid gap-2">
+        // `minmax(0,1fr)` en la columna y `min-w-0` en el <li>: los renglones
+        // del resultado usan `truncate` (white-space: nowrap), y eso hace que su
+        // ancho mínimo sea la línea entera. Sin acotar la pista, el grid crece
+        // con el texto y el renglón se sale de la tarjeta (se veía en el
+        // iPhone). La agenda no tiene el problema porque usa `break-words`.
+        <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-2">
           {hits.map((a) => {
             const day = dayOf(a.start_time);
             const svc = a.service_slug
               ? getService(config, a.service_slug)
               : null;
             return (
-              <li key={a.id}>
+              <li key={a.id} className="min-w-0">
                 <button
                   type="button"
                   onClick={() => onPick(day)}
