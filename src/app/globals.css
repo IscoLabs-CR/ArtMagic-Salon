@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  /* Crema cálida: es el fondo de la agenda del salón, donde manda la lectura.
+     Las pantallas de cara a la clienta usan `.brand-bg` (el fondo de la marca). */
+  background: #f6f1e8;
+  color: #171310;
+  font-family: var(--font-inter), system-ui, sans-serif;
+  /* Red de seguridad en celular: si un nombre largo (salón, clienta, servicio)
+     se pasa del ancho, se recorta en vez de abrir scroll horizontal y dejar las
+     cabeceras corridas. `clip` en vez de `hidden` a propósito: `hidden` crearía
+     un contenedor de scroll y rompería el `sticky` de la cabecera del wizard. */
+  overflow-x: clip;
+  /* En horizontal, el notch del iPhone se come un costado de la pantalla. Los
+     fondos van en elementos `fixed` (no los afecta este relleno), así que solo
+     se corre el contenido. En pantallas sin muesca estos valores son 0. */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Fondo de la marca (Background.jpeg: degradado negro → dorado). La capa oscura
+   encima no es decorativa: sin ella el texto crema no llega a contraste AA sobre
+   la zona dorada de la imagen. */
+.brand-bg {
+  background-color: #0b0b0b;
+  background-image: linear-gradient(
+      to bottom right,
+      rgba(0, 0, 0, 0.4),
+      rgba(0, 0, 0, 0.62)
+    ),
+    url("/background.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Entrada del aviso de servicios por teléfono: el fondo se funde y el panel cae
+   hasta su lugar en vez de aparecer en seco. La curva es una desaceleración
+   fuerte (arranca rápido, frena al final) para que se lea como algo que aterriza.
+   Sin sobrepaso a propósito: en celular el panel está pegado al borde inferior y
+   rebotar lo sacaría de la pantalla, dejando ver el fondo por debajo.
+   El bloque de `prefers-reduced-motion` de más abajo las anula solo. */
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes panel-drop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-32px);
+  }
+}
+
+.animate-overlay-in {
+  animation: overlay-fade-in 220ms ease-out both;
+}
+
+.animate-drop-in {
+  animation: panel-drop-in 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Accessibility floor: always-visible keyboard focus */
+:where(a, button, input, select, textarea):focus-visible {
+  outline: 2px solid #8a6a1f;
+  outline-offset: 2px;
+}
+
+/* Sobre el fondo oscuro el dorado antiguo desaparece: ahí el foco va en dorado
+   brillante. */
+.brand-bg :where(a, button):focus-visible,
+.on-dark :where(a, button):focus-visible {
+  outline-color: #e3c574;
+}
+
+input[type="tel"]::-webkit-outer-spin-button,
+input[type="tel"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
