@@ -66,17 +66,23 @@ lee en vivo de la base** con el RPC `get_salon_public` — cambiarla no requiere
   y el `max_bookings_per_slot` del salón.
 - **Horizonte de reserva:** el cliente elige el día en un calendario mensual
   (`src/components/MonthCalendar.tsx`) que llega hasta `theme.booking_horizon_days`
-  días (60 por defecto).
+  días (60 por defecto; **este salón está en 365** — hay clientas que agendan sus
+  tratamientos largos con ocho meses de anticipación). Se cambia en la base, sin
+  redeploy.
 - **Datos del cliente al reservar:** nombre + teléfono (sin login).
 
 ## Panel del barbero
 
 Agenda del día en Realtime: crear, eliminar y reagendar citas, y **cambiar el
 servicio** de una ya creada (mantiene el inicio y recalcula el fin; no re-envía la
-push, porque el aviso se dispara solo al insertar). Los bloqueos van por horario
-suelto o por **día completo** para vacaciones — un rango con dos calendarios que
-crea un bloqueo por cada día abierto y avisa de las citas ya agendadas que caen
-adentro, porque bloquear **no** las cancela. Además, panel semanal de ingresos.
+push, porque el aviso se dispara solo al insertar). Tocar la fecha despliega un
+calendario mensual para saltar a cualquier día del año sin recorrerlo con las
+flechas; ahí sí se pueden abrir los días cerrados, que es donde se ven los
+bloqueos. Los bloqueos van por horario suelto o por **día completo** para
+vacaciones — un rango con dos calendarios (tope `MAX_BLOCK_SPAN_DAYS`, 90 días)
+que crea un bloqueo por cada día abierto y avisa de las citas ya agendadas que
+caen adentro, porque bloquear **no** las cancela. Además, panel semanal de
+ingresos.
 
 ## Seguridad y datos
 

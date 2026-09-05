@@ -26,6 +26,10 @@ import {
  * Un día se puede tocar solo si el salón abre ese día de la semana y la fecha cae
  * dentro de la ventana. Las flechas se apagan al llegar a los meses de los extremos.
  *
+ * `allowClosed` levanta la primera condición: lo usa el navegador de la agenda,
+ * donde la estilista sí necesita abrir un domingo para ver sus bloqueos. Los días
+ * cerrados quedan atenuados pero clickeables.
+ *
  * `tone` decide sobre qué fondo se dibuja: "dark" para el fondo de la marca del
  * wizard, "light" (por defecto) para el crema del panel de la estilista.
  */
@@ -40,6 +44,7 @@ export default function MonthCalendar({
   value,
   onChange,
   window: win,
+  allowClosed = false,
   tone = "light",
 }: {
   config: SalonConfig;
@@ -47,6 +52,8 @@ export default function MonthCalendar({
   onChange: (dateStr: string) => void;
   /** Por defecto, la ventana del cliente. */
   window?: BookingWindow;
+  /** Deja tocar también los días en que el salón no abre. */
+  allowClosed?: boolean;
   tone?: Tone;
 }) {
   const w = win ?? bookingWindow(config);
@@ -126,6 +133,7 @@ export default function MonthCalendar({
               dateStr={d}
               config={config}
               win={w}
+              allowClosed={allowClosed}
               isToday={d === today}
               active={value === d}
               tone={tone}
@@ -142,6 +150,7 @@ function DayCell({
   dateStr,
   config,
   win,
+  allowClosed,
   isToday,
   active,
   tone,
@@ -150,15 +159,19 @@ function DayCell({
   dateStr: string;
   config: SalonConfig;
   win: BookingWindow;
+  allowClosed: boolean;
   isToday: boolean;
   active: boolean;
   tone: Tone;
   onSelect: (d: string) => void;
 }) {
-  const selectable = isSelectableDay(config, dateStr, win);
+  const closed = isClosedDay(config, dateStr);
+  const inWindow = dateStr >= win.minDate && dateStr <= win.maxDate;
+  const selectable = allowClosed ? inWindow : isSelectableDay(config, dateStr, win);
   // El chip viejo escribía "cerrado" bajo el número; en la grilla no hay lugar,
   // así que el motivo viaja en el aria-label para quien use lector de pantalla.
-  const reason = isClosedDay(config, dateStr) ? "cerrado" : "no disponible";
+  // Con `allowClosed` el día igual se puede abrir, pero conviene anunciarlo.
+  const note = closed ? "cerrado" : "no disponible";
 
   return (
     <button
@@ -166,9 +179,9 @@ function DayCell({
       disabled={!selectable}
       onClick={() => onSelect(dateStr)}
       aria-label={
-        selectable
+        selectable && !closed
           ? longDateLabel(dateStr)
-          : `${longDateLabel(dateStr)}, ${reason}`
+          : `${longDateLabel(dateStr)}, ${note}`
       }
       aria-current={isToday ? "date" : undefined}
       className={[
@@ -179,9 +192,13 @@ function DayCell({
             : "cursor-not-allowed border-line bg-line/40 text-muted/60"
           : active
             ? "border-brand bg-brand text-white"
-            : isToday
-              ? "border-brand/50 bg-paper font-semibold text-ink hover:border-brand hover:bg-brand-tint"
-              : "border-line bg-paper text-ink hover:border-brand hover:bg-brand-tint",
+            : closed
+              ? // Abierto al clic pero el salón no atiende: se distingue del día
+                // normal con borde punteado y número apagado.
+                "border-dashed border-line bg-line/30 text-muted hover:border-brand hover:text-ink"
+              : isToday
+                ? "border-brand/50 bg-paper font-semibold text-ink hover:border-brand hover:bg-brand-tint"
+                : "border-line bg-paper text-ink hover:border-brand hover:bg-brand-tint",
       ].join(" ")}
     >
       {dateParts(dateStr).day}

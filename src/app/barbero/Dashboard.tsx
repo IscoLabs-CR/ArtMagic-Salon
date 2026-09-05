@@ -19,8 +19,8 @@ import {
   formatShopTime,
   shopClock,
   longDateLabel,
-  upcomingDates,
-  dateParts,
+  adminBookingWindow,
+  agendaWindow,
   isClosedDay,
   minutesToLabel,
   formatDuration,
@@ -94,6 +94,9 @@ export default function Dashboard({
     barbers.find((b) => b.id === viewing)?.name ?? barberName;
   const showPicker = isAdmin && barbers.length > 1;
   const [appts, setAppts] = useState<Appointment[]>([]);
+  // Calendario del navegador de fechas: plegado por defecto para no empujar la
+  // agenda del día hacia abajo en el celular.
+  const [calOpen, setCalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ModalState>(null);
   const [week, setWeek] = useState<WeekStats | null>(null);
@@ -256,6 +259,12 @@ export default function Dashboard({
   }
 
   const isToday = dateStr === shopToday(tz);
+  // Hasta dónde llega el navegador de la agenda. Es la misma ventana para el
+  // calendario y para las flechas: si la flecha pudiera pasarse, el calendario
+  // abriría en un mes con todos los días apagados.
+  const agendaWin = useMemo(() => agendaWindow(tz), [tz]);
+  const canGoBack = dateStr > agendaWin.minDate;
+  const canGoNext = dateStr < agendaWin.maxDate;
 
   return (
     <div className="flex-1">
@@ -333,40 +342,71 @@ export default function Dashboard({
         {/* Resumen de la semana — de la estilista seleccionada */}
         {week && <WeeklyPanel week={week} config={config} />}
 
-        {/* Navegador de fechas */}
-        <div className="mt-6 flex items-center justify-between gap-3">
-          <button
-            onClick={() => setDateStr((d) => addDaysStr(d, -1))}
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-line text-ink transition-colors hover:border-brand hover:text-brand"
-            aria-label="Día anterior"
-          >
-            ‹
-          </button>
-          {/* "Miércoles 3 de septiembre" no cabe entre las dos flechas en un
-              teléfono angosto: `min-w-0` lo deja partir en dos líneas. */}
-          <div className="min-w-0 text-center">
-            <p className="font-display text-lg font-semibold uppercase tracking-tight text-ink sm:text-xl">
-              {longDateLabel(dateStr)}
-            </p>
-            {!isToday && (
+        {/* Navegador de fechas. Las flechas mueven un día; tocar la fecha abre
+            el calendario del mes para saltar lejos sin cientos de clics (hay
+            clientas que agendan con ocho meses de anticipación). */}
+        <div className="mt-6">
+          <div className="flex items-center justify-between gap-3">
+            <button
+              onClick={() => setDateStr((d) => addDaysStr(d, -1))}
+              disabled={!canGoBack}
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-line text-ink transition-colors hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:border-line disabled:text-muted/60 disabled:hover:border-line disabled:hover:text-muted/60"
+              aria-label="Día anterior"
+            >
+              ‹
+            </button>
+            {/* "Miércoles 3 de septiembre" no cabe entre las dos flechas en un
+                teléfono angosto: `min-w-0` lo deja partir en dos líneas. */}
+            <div className="min-w-0 text-center">
               <button
-                onClick={() => setDateStr(shopToday(tz))}
-                className="text-xs font-medium text-brand hover:text-brand-deep"
+                onClick={() => setCalOpen((v) => !v)}
+                aria-expanded={calOpen}
+                aria-label={`${longDateLabel(dateStr)}. Elegir otra fecha en el calendario`}
+                className="font-display text-lg font-semibold uppercase tracking-tight text-ink transition-colors hover:text-brand sm:text-xl"
               >
-                Ir a hoy
+                {longDateLabel(dateStr)}{" "}
+                <span aria-hidden="true" className="text-sm text-muted">
+                  {calOpen ? "▴" : "▾"}
+                </span>
               </button>
-            )}
-            {isToday && (
-              <p className="text-xs uppercase tracking-wider text-muted">Hoy</p>
-            )}
+              {!isToday && (
+                <button
+                  onClick={() => setDateStr(shopToday(tz))}
+                  className="block w-full text-xs font-medium text-brand hover:text-brand-deep"
+                >
+                  Ir a hoy
+                </button>
+              )}
+              {isToday && (
+                <p className="text-xs uppercase tracking-wider text-muted">Hoy</p>
+              )}
+            </div>
+            <button
+              onClick={() => setDateStr((d) => addDaysStr(d, 1))}
+              disabled={!canGoNext}
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-line text-ink transition-colors hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:border-line disabled:text-muted/60 disabled:hover:border-line disabled:hover:text-muted/60"
+              aria-label="Día siguiente"
+            >
+              ›
+            </button>
           </div>
-          <button
-            onClick={() => setDateStr((d) => addDaysStr(d, 1))}
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-line text-ink transition-colors hover:border-brand hover:text-brand"
-            aria-label="Día siguiente"
-          >
-            ›
-          </button>
+
+          {calOpen && (
+            <div className="mt-3 rounded-2xl border border-line bg-paper p-3">
+              {/* `allowClosed`: en la agenda sí hace falta poder abrir un día
+                  cerrado — ahí es donde se ven los bloqueos de todo el día. */}
+              <MonthCalendar
+                config={config}
+                value={dateStr}
+                onChange={(d) => {
+                  setDateStr(d);
+                  setCalOpen(false);
+                }}
+                window={agendaWin}
+                allowClosed
+              />
+            </div>
+          )}
         </div>
 
         {/* Acciones */}
@@ -1300,48 +1340,22 @@ function Modal({
   );
 }
 
-function DayChips({
-  config,
-  value,
-  onChange,
-}: {
-  config: SalonConfig;
-  value: string;
-  onChange: (d: string) => void;
-}) {
-  const dates = upcomingDates(14, config.timezone);
-  return (
-    <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
-      {dates.map((d) => {
-        const p = dateParts(d);
-        const closed = isClosedDay(config, d);
-        const active = value === d;
-        return (
-          <button
-            key={d}
-            type="button"
-            disabled={closed}
-            onClick={() => onChange(d)}
-            className={[
-              "flex shrink-0 flex-col items-center rounded-xl border px-3 py-2 transition-colors",
-              closed
-                ? "cursor-not-allowed border-line bg-line/40 text-muted/60"
-                : active
-                  ? "border-brand bg-brand text-white"
-                  : "border-line bg-paper text-ink hover:border-brand",
-            ].join(" ")}
-          >
-            <span className="text-[10px] uppercase tracking-wider">
-              {p.weekdayShort}
-            </span>
-            <span className="font-mono text-base font-medium leading-tight">
-              {p.day}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
+/**
+ * Fecha con la que arranca un modal: nunca en el pasado y nunca un día cerrado.
+ *
+ * Las dos cosas se alcanzan desde la agenda —se puede estar mirando un día que
+ * ya pasó, o parada en un domingo, que es justo lo que habilita `allowClosed`—
+ * y en ninguna se agenda: sin esto el modal abre en un mes con todo apagado, o
+ * en un día que solo sabe decir "el salón no abre".
+ *
+ * El tope de vueltas es una red: un salón con la semana entera cerrada dejaría
+ * el bucle sin salida.
+ */
+function seedDate(config: SalonConfig, dateStr: string): string {
+  const today = shopToday(config.timezone);
+  let d = dateStr < today ? today : dateStr;
+  for (let i = 0; i < 7 && isClosedDay(config, d); i++) d = addDaysStr(d, 1);
+  return d;
 }
 
 /**
@@ -1749,7 +1763,11 @@ function NewAppointmentModal({
         { admin: isAdmin },
       )[0]?.slug ?? "",
   );
-  const [date, setDate] = useState(defaultDate);
+  const [date, setDate] = useState(() => seedDate(config, defaultDate));
+  const bookWin = useMemo(
+    () => adminBookingWindow(config.timezone),
+    [config.timezone],
+  );
   const [slots, setSlots] = useState<Slot[]>([]);
   const [slot, setSlot] = useState<Slot | null>(null);
   const [name, setName] = useState("");
@@ -1815,7 +1833,12 @@ function NewAppointmentModal({
 
         <div>
           <p className="mb-2 text-sm font-medium text-ink">Día</p>
-          <DayChips config={config} value={date} onChange={setDate} />
+          <MonthCalendar
+            config={config}
+            value={date}
+            onChange={setDate}
+            window={bookWin}
+          />
         </div>
 
         <div>
@@ -1870,10 +1893,11 @@ function NewAppointmentModal({
 
 /* ---------------------------------------------------------- block modal */
 
-// Cuánto puede mirar hacia adelante el barbero para bloquear. Es más que el
-// horizonte del cliente a propósito: él cierra las vacaciones de diciembre en
-// agosto, mucho antes de que nadie pueda agendar en esas fechas.
-const BLOCK_LOOKAHEAD_DAYS = 365;
+// Tope del bloqueo por rango. Va suelto y NO atado al horizonte del cliente: con
+// el horizonte en un año, un rango mal tipeado borraría meses de agenda de un
+// botón, y para deshacerlo hay que ir cita por cita. Unas vacaciones largas
+// caben de sobra en tres meses.
+const MAX_BLOCK_SPAN_DAYS = 90;
 
 type BlockMode = "time" | "days";
 
@@ -1893,7 +1917,7 @@ function BlockModal({
   onDone: (d: string) => void;
 }) {
   const [mode, setMode] = useState<BlockMode>("time");
-  const [date, setDate] = useState(defaultDate);
+  const [date, setDate] = useState(() => seedDate(config, defaultDate));
   const win = hoursWindow(config);
   // Horario del día elegido (o la ventana más amplia si cae en un día cerrado).
   const hours = dayHours(config, date) ?? win;
@@ -1903,8 +1927,8 @@ function BlockModal({
   const [submitting, setSubmitting] = useState(false);
 
   // Rango de días completos (vacaciones, viajes).
-  const [fromDate, setFromDate] = useState(defaultDate);
-  const [toDate, setToDate] = useState(defaultDate);
+  const [fromDate, setFromDate] = useState(() => seedDate(config, defaultDate));
+  const [toDate, setToDate] = useState(() => seedDate(config, defaultDate));
   // El conteo viaja con el rango que lo produjo, para no mostrar el número del
   // rango anterior mientras la consulta del nuevo sigue en vuelo.
   const [conflicts, setConflicts] = useState<{ key: string; count: number } | null>(
@@ -1912,10 +1936,7 @@ function BlockModal({
   );
 
   const tz = config.timezone;
-  const blockWindow: BookingWindow = useMemo(() => {
-    const minDate = shopToday(tz);
-    return { minDate, maxDate: addDaysStr(minDate, BLOCK_LOOKAHEAD_DAYS) };
-  }, [tz]);
+  const blockWindow: BookingWindow = useMemo(() => adminBookingWindow(tz), [tz]);
 
   const openDays = openDaysInRange(config, fromDate, toDate);
   const rangeKey = `${fromDate}:${toDate}`;
@@ -1993,9 +2014,9 @@ function BlockModal({
       return;
     }
     const span = rangeLengthDays(fromDate, toDate);
-    if (span > config.bookingHorizonDays) {
+    if (span > MAX_BLOCK_SPAN_DAYS) {
       setError(
-        `No se pueden bloquear más de ${config.bookingHorizonDays} días de una vez.`,
+        `No se pueden bloquear más de ${MAX_BLOCK_SPAN_DAYS} días de una vez.`,
       );
       return;
     }
@@ -2059,7 +2080,12 @@ function BlockModal({
 
             <div>
               <p className="mb-2 text-sm font-medium text-ink">Día</p>
-              <DayChips config={config} value={date} onChange={pickDate} />
+              <MonthCalendar
+                config={config}
+                value={date}
+                onChange={pickDate}
+                window={blockWindow}
+              />
             </div>
 
             <div className="grid grid-cols-1 gap-3">
@@ -2232,7 +2258,11 @@ function RescheduleModal({
     timeZone: config.timezone,
   }).format(new Date(appt.start_time));
 
-  const [date, setDate] = useState(startDateStr);
+  const [date, setDate] = useState(() => seedDate(config, startDateStr));
+  const bookWin = useMemo(
+    () => adminBookingWindow(config.timezone),
+    [config.timezone],
+  );
   const [slots, setSlots] = useState<Slot[]>([]);
   const [slot, setSlot] = useState<Slot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -2296,7 +2326,12 @@ function RescheduleModal({
 
         <div>
           <p className="mb-2 text-sm font-medium text-ink">Día</p>
-          <DayChips config={config} value={date} onChange={setDate} />
+          <MonthCalendar
+            config={config}
+            value={date}
+            onChange={setDate}
+            window={bookWin}
+          />
         </div>
 
         <div>

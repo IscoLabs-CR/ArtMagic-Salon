@@ -396,12 +396,6 @@ export function addDaysStr(dateStr: string, n: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
-/** Próximos `count` días calendario (YYYY-MM-DD) desde hoy, en hora del salón. */
-export function upcomingDates(count: number, tz: string): string[] {
-  const today = shopToday(tz);
-  return Array.from({ length: count }, (_, i) => addDaysStr(today, i));
-}
-
 export interface DateParts {
   weekdayShort: string;
   weekdayFull: string;
@@ -489,6 +483,29 @@ export function bookingWindow(config: SalonConfig): BookingWindow {
   return {
     minDate,
     maxDate: addDaysStr(minDate, Math.max(1, config.bookingHorizonDays) - 1),
+  };
+}
+
+/**
+ * El panel mira más lejos que el cliente a propósito: la dueña agenda por
+ * teléfono y cierra las vacaciones de diciembre en agosto, antes de que nadie
+ * pueda reservar esas fechas. ~13 meses, o sea siempre un poco más que el
+ * horizonte del cliente: cualquier fecha agendable entra en la ventana del panel.
+ */
+export const ADMIN_HORIZON_DAYS = 400;
+
+/** Ventana del panel para crear, mover o bloquear: de hoy hacia adelante. */
+export function adminBookingWindow(tz: string): BookingWindow {
+  const minDate = shopToday(tz);
+  return { minDate, maxDate: addDaysStr(minDate, ADMIN_HORIZON_DAYS) };
+}
+
+/** Ventana para navegar la agenda: también hacia atrás, para revisar lo que ya pasó. */
+export function agendaWindow(tz: string): BookingWindow {
+  const today = shopToday(tz);
+  return {
+    minDate: addDaysStr(today, -ADMIN_HORIZON_DAYS),
+    maxDate: addDaysStr(today, ADMIN_HORIZON_DAYS),
   };
 }
 
