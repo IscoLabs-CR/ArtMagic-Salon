@@ -1,5 +1,8 @@
-import { type NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
+
+/** Rutas públicas que se saltean el refresco de sesión (ver el cuerpo del proxy). */
+const NO_SESSION = new Set(["/sw.js", "/manifest.webmanifest"]);
 
 /**
  * Next 16 renombró `middleware` → `proxy` (ver
@@ -61,7 +64,15 @@ export async function proxy(request: NextRequest) {
   requestHeaders.set("Content-Security-Policy", csp);
   requestHeaders.set("x-nonce", nonce);
 
-  const response = await updateSession(request, requestHeaders);
+  // El service worker y el manifest son archivos públicos: no necesitan sesión.
+  // El navegador los pide JUNTO con la página al abrir la app, y tres refrescos
+  // simultáneos del mismo refresh token es justo lo que rompe la sesión. Igual
+  // pasan por acá para recibir la CSP.
+  const needsSession = !NO_SESSION.has(request.nextUrl.pathname);
+
+  const response = needsSession
+    ? await updateSession(request, requestHeaders)
+    : NextResponse.next({ request: { headers: requestHeaders } });
 
   // Y en la response, para que el navegador aplique la política.
   response.headers.set("Content-Security-Policy", csp);

@@ -253,7 +253,10 @@ export default function Dashboard({
   }
 
   async function logout() {
-    await supabase.auth.signOut();
+    // `scope: "local"` cierra la sesión SOLO en este dispositivo. Con el valor
+    // por defecto ("global") Supabase borra la sesión en el servidor, así que
+    // salir en la computadora sacaba también del celular.
+    await supabase.auth.signOut({ scope: "local" });
     router.push("/barbero/login");
     router.refresh();
   }

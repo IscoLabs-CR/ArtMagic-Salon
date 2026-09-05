@@ -29,6 +29,19 @@ export async function updateSession(
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value),
           );
+          // `requestHeaders` se clonó ANTES de este refresco, así que su
+          // cabecera `cookie` todavía lleva el token vencido. Hay que
+          // reescribirla a mano: el patrón oficial de Supabase pasa `request`
+          // (que se releé solo), pero acá se pasa un clon porque además carga
+          // la CSP y el nonce.
+          //
+          // Sin esta línea el render recibe el token viejo, vuelve a refrescar
+          // con el refresh token que Supabase ACABA de rotar y, si esa segunda
+          // llamada cae fuera de la ventana de reúso (10 s — un arranque en
+          // frío de Vercel se la come), Supabase lo toma como token robado y
+          // borra la sesión en TODOS los dispositivos. Ese era el "se cierra
+          // sola al volver a abrir la app".
+          requestHeaders.set("cookie", request.cookies.toString());
           supabaseResponse = NextResponse.next({
             request: { headers: requestHeaders },
           });
@@ -56,6 +69,13 @@ export async function updateSession(
     // posterior seguiría rebotando al login (y al revés en un CDN compartido).
     const redirect = NextResponse.redirect(url);
     redirect.headers.set("Cache-Control", "no-store");
+    // Las cookies que Supabase escribió (acá casi siempre el borrado de una
+    // sesión ya inválida) viajan en `supabaseResponse`, que este redirect
+    // descarta. Si se pierden, el navegador se queda con cookies zombis y
+    // vuelve a rebotar en el próximo intento.
+    supabaseResponse.cookies
+      .getAll()
+      .forEach((cookie) => redirect.cookies.set(cookie));
     return redirect;
   }
 
